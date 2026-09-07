@@ -27,15 +27,16 @@ async function run() {
     const db = client.db("fcb-db");
     const userCollection = db.collection("user");
     const playersCollection = db.collection("players");
+    const fixturesCollection = db.collection("fixtures");
 
     app.get("/user", async (req, res) => {
       const cursor = userCollection.find();
       const result = await cursor.toArray();
       res.send(result);
     });
-    
-    ///players 
-    
+
+    ///players
+
     app.get("/players", async (req, res) => {
       const { title, search } = req.query;
       let query = {};
@@ -90,6 +91,77 @@ async function run() {
         res.send(result);
       } catch (error) {
         res.status(500).send({ error: "Failed to fetch player details" });
+      }
+    });
+
+    // Add Player
+    app.post("/add-player", async (req, res) => {
+      try {
+        const player = req.body;
+        console.log(player, "aha player ta koi theke asse");
+        const result = await playersCollection.insertOne(player);
+        res
+          .status(201)
+          .json({
+            success: true,
+            message: "Player created successfully",
+            insertedId: result.insertedId,
+          });
+      } catch (error) {
+        res
+          .status(500)
+          .json({ success: false, error: "Failed to create player" });
+      }
+    });
+
+    //Fixtures
+    app.get("/fixtures", async (req, res) => {
+      const cursor = fixturesCollection.find().sort({ _id: -1 });
+      const result = await cursor.toArray();
+      res.send(result);
+    });
+
+    // Fixtures POST route
+    app.post("/fixtures", async (req, res) => {
+      try {
+        const { month, matches } = req.body;
+
+        if (
+          !month ||
+          !matches ||
+          !Array.isArray(matches) ||
+          matches.length === 0
+        ) {
+          return res
+            .status(400)
+            .json({ error: "Required fields (month or matches) are missing." });
+        }
+
+        const newFixtureGroup = {
+          month,
+          matches: matches.map((match) => ({
+            date: match.date || "",
+            time: match.time || "",
+            homeTeam: match.homeTeam || "",
+            homeLogo: match.homeLogo || "",
+            awayTeam: match.awayTeam || "",
+            awayLogo: match.awayLogo || "",
+            status: match.status || "Upcoming",
+            matchCenterUrl: match.matchCenterUrl || "",
+          })),
+        };
+
+        const result = await fixturesCollection.insertOne(newFixtureGroup);
+        res.status(201).json({
+          success: true,
+          insertedId: result.insertedId,
+          ...newFixtureGroup,
+        });
+      } catch (err) {
+        res.status(500).json({
+          success: false,
+          error: err.message || "Failed to create fixture.",
+        });
       }
     });
 
