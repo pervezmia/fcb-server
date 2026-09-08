@@ -98,7 +98,7 @@ async function run() {
     app.post("/add-player", async (req, res) => {
       try {
         const player = req.body;
-        console.log(player, "aha player ta koi theke asse");
+        // console.log(player, "aha player ta koi theke asse");
         const result = await playersCollection.insertOne(player);
         res
           .status(201)
