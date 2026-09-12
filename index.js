@@ -2,15 +2,17 @@ const express = require("express");
 require("dotenv").config();
 const app = express();
 const cors = require("cors");
+
 const port = process.env.PORT || 5000;
 
 app.use(express.json());
 app.use(cors());
 
 const { MongoClient, ServerApiVersion, ObjectId } = require("mongodb");
+const { createRemoteJWKSet, jwtVerify } = require("jose-cjs");
+
 const uri = process.env.MONGO_DB_URI;
 
-// Create a MongoClient with a MongoClientOptions object to set the Stable API version
 const client = new MongoClient(uri, {
   serverApi: {
     version: ServerApiVersion.v1,
@@ -19,15 +21,37 @@ const client = new MongoClient(uri, {
   },
 });
 
+const JWKS = createRemoteJWKSet(
+  new URL(`${process.env.BETTER_AUTH_URL}/api/auth/jwks`),
+);
+
 async function run() {
   try {
-    // Connect the client to the server	(optional starting in v4.7)
-    // await client.connect();
-
     const db = client.db("fcb-db");
     const userCollection = db.collection("user");
     const playersCollection = db.collection("players");
     const fixturesCollection = db.collection("fixtures");
+
+    const verifyToken = async (req, res, next) => {
+      const authHeader = req.headers.authorization;
+      if (!authHeader || !authHeader.startsWith("Bearer ")) {
+        return res.status(401).send({ message: "Unauthorized access" });
+      }
+
+      const token = authHeader.split(" ")[1];
+      if (!token) {
+        return res.status(401).send({ message: "Unauthorized access" });
+      }
+
+      try {
+        const { payload } = await jwtVerify(token, JWKS);
+        req.user = payload;
+        next();
+      } catch (error) {
+        console.log(error);
+        return res.status(401).send({ message: "Unauthorized access" });
+      }
+    };
 
     app.get("/user", async (req, res) => {
       const cursor = userCollection.find();
@@ -71,12 +95,76 @@ async function run() {
       }
     });
 
-    // নির্দিষ্ট ইউজারের/প্লেয়ারের details পাওয়ার জন্য route
+    // ================================================
+    // গুরুত্বপূর্ণ: /players/me অবশ্যই /players/:id এর আগে
+    // থাকতে হবে। Express উপর থেকে নিচে route match করে —
+    // /players/:id আগে থাকলে "me"-কে :id হিসেবে ধরে ফেলবে।
+    // ================================================
+    app.get("/players/me", verifyToken, async (req, res) => {
+      try {
+        let player = await playersCollection.findOne({ userId: req.user.sub });
+
+        if (!player && req.user.email) {
+          player = await playersCollection.findOne({ email: req.user.email });
+
+          if (player) {
+            await playersCollection.updateOne(
+              { _id: player._id },
+              { $set: { userId: req.user.sub } },
+            );
+            player.userId = req.user.sub;
+          }
+        }
+
+        if (!player) {
+          return res.status(404).json({ error: "Player profile not found" });
+        }
+
+        res.send(player);
+      } catch (error) {
+        res.status(500).json({ error: "Failed to fetch player profile" });
+      }
+    });
+
+    app.patch("/players/me", verifyToken, async (req, res) => {
+      const updates = { ...req.body };
+      delete updates.userId;
+      delete updates._id;
+
+      try {
+        let player = await playersCollection.findOne({ userId: req.user.sub });
+
+        if (!player && req.user.email) {
+          player = await playersCollection.findOne({ email: req.user.email });
+        }
+
+        if (!player) {
+          return res.status(404).json({ error: "Player profile not found" });
+        }
+
+        const result = await playersCollection.findOneAndUpdate(
+          { _id: player._id },
+          {
+            $set: {
+              ...updates,
+              userId: req.user.sub,
+              updatedAt: new Date().toISOString(),
+            },
+          },
+          { returnDocument: "after" },
+        );
+
+        res.json({ success: true, player: result });
+      } catch (error) {
+        res.status(500).json({ error: "Failed to update player profile" });
+      }
+    });
+
+    // নির্দিষ্ট ইউজারের/প্লেয়ারের details পাওয়ার জন্য route (/players/me এর পরে)
     app.get("/players/:id", async (req, res) => {
       const { id } = req.params;
 
       try {
-        // আইডি সঠিক ফরম্যাটে আছে কিনা চেক করা (যাতে ভুল আইডিতে সার্ভার ক্রাশ না করে)
         if (!ObjectId.isValid(id)) {
           return res.status(400).send({ error: "Invalid player ID format" });
         }
@@ -95,18 +183,17 @@ async function run() {
     });
 
     // Add Player
-    app.post("/add-player", async (req, res) => {
+    app.post("/add-player", verifyToken, async (req, res) => {
       try {
-        const player = req.body;
-        // console.log(player, "aha player ta koi theke asse");
+        const player = { ...req.body, userId: req.user.sub };
+        delete player._id;
+
         const result = await playersCollection.insertOne(player);
-        res
-          .status(201)
-          .json({
-            success: true,
-            message: "Player created successfully",
-            insertedId: result.insertedId,
-          });
+        res.status(201).json({
+          success: true,
+          message: "Player created successfully",
+          insertedId: result.insertedId,
+        });
       } catch (error) {
         res
           .status(500)
@@ -165,13 +252,10 @@ async function run() {
       }
     });
 
-    // Send a ping to confirm a successful connection
-    // await client.db("admin").command({ ping: 1 });
     console.log(
       "Pinged your deployment. You successfully connected to MongoDB!",
     );
   } finally {
-    // Ensures that the client will close when you finish/error
     // await client.close();
   }
 }
