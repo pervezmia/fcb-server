@@ -185,6 +185,18 @@ async function run() {
     // Add Player
     app.post("/add-player", verifyToken, async (req, res) => {
       try {
+        //check exiting player
+        const existing = await playersCollection.findOne({
+          userId: req.user.sub,
+        });
+
+        if (existing) {
+          return res.status(400).json({
+            success: false,
+            error:
+              "Player profile already exists. Please edit your existing profile.",
+          });
+        }
         const player = { ...req.body, userId: req.user.sub };
         delete player._id;
 
