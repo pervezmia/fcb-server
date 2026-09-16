@@ -264,6 +264,40 @@ async function run() {
       }
     });
 
+    // Update Match Status Route
+    app.patch("/fixtures/:groupId/match/:matchIndex", async (req, res) => {
+      try {
+        const { groupId, matchIndex } = req.params;
+        const { status } = req.body; // শুধু status রিসিভ করা হচ্ছে
+
+        const query = { _id: new ObjectId(groupId) };
+        const fixtureGroup = await fixturesCollection.findOne(query);
+
+        if (!fixtureGroup) {
+          return res.status(404).json({ error: "Fixture group not found." });
+        }
+
+        // নির্দিষ্ট ম্যাচের অবজেক্ট চেক করা
+        const targetMatch = fixtureGroup.matches[matchIndex];
+        if (!targetMatch) {
+          return res.status(404).json({ error: "Match not found." });
+        }
+
+        // শুধু status থাকলে সেটি আপডেট করা
+        if (status) {
+          targetMatch.status = status;
+        }
+
+        const updateResult = await fixturesCollection.updateOne(query, {
+          $set: { matches: fixtureGroup.matches },
+        });
+
+        res.json({ success: true, modifiedCount: updateResult.modifiedCount });
+      } catch (err) {
+        res.status(500).json({ success: false, error: err.message });
+      }
+    });
+    
     console.log(
       "Pinged your deployment. You successfully connected to MongoDB!",
     );
