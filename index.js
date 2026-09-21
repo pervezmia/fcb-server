@@ -31,6 +31,7 @@ async function run() {
     const userCollection = db.collection("user");
     const playersCollection = db.collection("players");
     const fixturesCollection = db.collection("fixtures");
+    const bestMomentsCollection = db.collection("best-moments");
 
     const verifyToken = async (req, res, next) => {
       const authHeader = req.headers.authorization;
@@ -297,7 +298,30 @@ async function run() {
         res.status(500).json({ success: false, error: err.message });
       }
     });
+
+    // Best Moments GET API
+    app.get("/best-moments", async (req, res) => {
+      try {
+        const moments = await bestMomentsCollection.find().toArray();
+        res.status(200).json(moments);
+      } catch (error) {
+        res.status(500).json({ success: false, error: error.message });
+      }
+    });
+
     
+    //Best Moments
+    app.post("/best-moments", async (req, res) => {
+      try {
+        const newMoment = req.body;
+        // ডাটাবেজে সেভ করার কোড (যেমন: MongoDB)
+        const result = await bestMomentsCollection.insertOne(newMoment);
+        res.status(201).json({ success: true, data: result });
+      } catch (error) {
+        res.status(500).json({ success: false, error: error.message });
+      }
+    });
+
     console.log(
       "Pinged your deployment. You successfully connected to MongoDB!",
     );
