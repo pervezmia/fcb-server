@@ -322,6 +322,47 @@ async function run() {
       }
     });
 
+    // Squad / Player Management (Add to Squad or Remove from Squad)
+    app.patch("/players/:id/squad", verifyToken, async (req, res) => {
+      const { id } = req.params;
+      const { isInSquad } = req.body; // true ba false asbe
+
+      try {
+        if (!ObjectId.isValid(id)) {
+          return res.status(400).send({ error: "Invalid player ID format" });
+        }
+
+        const player = await playersCollection.findOne({ _id: new ObjectId(id) });
+        if (!player) {
+          return res.status(404).send({ error: "Player not found" });
+        }
+
+        // Match count logic: add korle +1, bad dile -1 (minimum 0 hobe)
+        let currentMatches = player.matches || 0;
+        if (isInSquad) {
+          currentMatches += 1;
+        } else {
+          currentMatches = Math.max(0, currentMatches - 1);
+        }
+
+        const result = await playersCollection.findOneAndUpdate(
+          { _id: new ObjectId(id) },
+          {
+            $set: {
+              isInSquad: isInSquad,
+              matches: currentMatches,
+              updatedAt: new Date().toISOString(),
+            },
+          },
+          { returnDocument: "after" }
+        );
+
+        res.json({ success: true, player: result });
+      } catch (error) {
+        res.status(500).json({ error: "Failed to update player squad status" });
+      }
+    });
+
     console.log(
       "Pinged your deployment. You successfully connected to MongoDB!",
     );
