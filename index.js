@@ -34,6 +34,8 @@ async function run() {
     const bestMomentsCollection = db.collection("best-moments");
 
     const verifyToken = async (req, res, next) => {
+
+      
       const authHeader = req.headers.authorization;
       if (!authHeader || !authHeader.startsWith("Bearer ")) {
         return res.status(401).send({ message: "Unauthorized access" });
@@ -322,8 +324,8 @@ async function run() {
       }
     });
 
-    // Squad / Player Management (Add to Squad or Remove from Squad)
-    app.patch("/players/:id/squad", verifyToken, async (req, res) => {
+    //to be verifyToken , Squad / Player Management (Add to Squad or Remove from Squad)
+    app.patch("/players/:id/squad",  async (req, res) => {
       const { id } = req.params;
       const { isInSquad } = req.body; // true ba false asbe
 
