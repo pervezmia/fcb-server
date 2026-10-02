@@ -56,6 +56,25 @@ async function run() {
       }
     };
 
+    // Admin only middleware (verifyToken er por use korte hobe)
+    const verifyAdmin = async (req, res, next) => {
+      try {
+        let role = req.user?.role;
+        if (!role && req.user?.email) {
+          const dbUser = await userCollection.findOne({
+            email: req.user.email,
+          });
+          role = dbUser?.role;
+        }
+        if (role !== "admin") {
+          return res.status(403).send({ message: "Forbidden access" });
+        }
+        next();
+      } catch (error) {
+        return res.status(500).send({ message: "Failed to verify admin" });
+      }
+    };
+
     app.get("/user", async (req, res) => {
       const cursor = userCollection.find();
       const result = await cursor.toArray();
@@ -253,7 +272,7 @@ async function run() {
     // 1. Match-Specific Squad Add / Remove Route (Protected with verifyToken)
     app.patch(
       "/fixtures/:groupId/match/:matchIndex/squad",
-      verifyToken,
+      verifyToken, verifyAdmin,
       async (req, res) => {
         try {
           const { groupId, matchIndex } = req.params;
@@ -282,11 +301,9 @@ async function run() {
 
           // শুধু Upcoming ম্যাচে স্কোয়াড চেঞ্জ করা যাবে
           if (targetMatch.status !== "Upcoming") {
-            return res
-              .status(400)
-              .json({
-                error: "Squad can only be modified for upcoming matches.",
-              });
+            return res.status(400).json({
+              error: "Squad can only be modified for upcoming matches.",
+            });
           }
 
           const objectIds = ids.map((id) => new ObjectId(id));
@@ -322,7 +339,7 @@ async function run() {
     // 2. Update Match Status & Increment Player Match Count on "Completed"
     app.patch(
       "/fixtures/:groupId/match/:matchIndex/status",
-      verifyToken,
+      verifyToken, verifyAdmin, 
       async (req, res) => {
         try {
           const { groupId, matchIndex } = req.params;
