@@ -25,6 +25,8 @@ const JWKS = createRemoteJWKSet(
   new URL(`${process.env.BETTER_AUTH_URL}/api/auth/jwks`),
 );
 
+const VALID_STATUSES = ["Upcoming", "Live", "Completed", "Cancelled"];
+
 async function run() {
   try {
     const db = client.db("fcb-db");
@@ -33,8 +35,21 @@ async function run() {
     const fixturesCollection = db.collection("fixtures");
     const bestMomentsCollection = db.collection("best-moments");
     const SquadCollection = db.collection("squads");
+    const notificationsCollection = db.collection("notifications");
 
-    // Senior Security Developer Standard Middleware
+    // ---------- Helpers ----------
+    const getOpponent = (match) =>
+      /boraitola/i.test(match.homeTeam || "") ? match.awayTeam : match.homeTeam;
+
+    const findPlayerByUser = async (user) => {
+      let player = await playersCollection.findOne({ userId: user.sub });
+      if (!player && user.email) {
+        player = await playersCollection.findOne({ email: user.email });
+      }
+      return player;
+    };
+
+    // ---------- Middlewares ----------
     const verifyToken = async (req, res, next) => {
       const authHeader = req.headers.authorization;
       if (!authHeader || !authHeader.startsWith("Bearer ")) {
@@ -51,19 +66,17 @@ async function run() {
         req.user = payload;
         next();
       } catch (error) {
-        console.log(error);
+        console.log("JWT verify failed:", error.code, error.message);
         return res.status(401).send({ message: "Unauthorized access" });
       }
     };
 
-    // Admin only middleware (verifyToken er por use korte hobe)
+    // Admin only (verifyToken er por use korte hobe)
     const verifyAdmin = async (req, res, next) => {
       try {
         let role = req.user?.role;
         if (!role && req.user?.email) {
-          const dbUser = await userCollection.findOne({
-            email: req.user.email,
-          });
+          const dbUser = await userCollection.findOne({ email: req.user.email });
           role = dbUser?.role;
         }
         if (role !== "admin") {
@@ -75,13 +88,14 @@ async function run() {
       }
     };
 
+    // ---------- Users ----------
     app.get("/user", async (req, res) => {
       const cursor = userCollection.find();
       const result = await cursor.toArray();
       res.send(result);
     });
 
-    ///players
+    // ---------- Players ----------
     app.get("/players", async (req, res) => {
       const { title, search } = req.query;
       let query = {};
@@ -179,9 +193,7 @@ async function run() {
         if (!ObjectId.isValid(id)) {
           return res.status(400).send({ error: "Invalid player ID format" });
         }
-        const result = await playersCollection.findOne({
-          _id: new ObjectId(id),
-        });
+        const result = await playersCollection.findOne({ _id: new ObjectId(id) });
         if (!result) {
           return res.status(404).send({ error: "Player not found" });
         }
@@ -193,9 +205,7 @@ async function run() {
 
     app.post("/add-player", verifyToken, async (req, res) => {
       try {
-        const existing = await playersCollection.findOne({
-          userId: req.user.sub,
-        });
+        const existing = await playersCollection.findOne({ userId: req.user.sub });
         if (existing) {
           return res.status(400).json({
             success: false,
@@ -212,9 +222,7 @@ async function run() {
           insertedId: result.insertedId,
         });
       } catch (error) {
-        res
-          .status(500)
-          .json({ success: false, error: "Failed to create player" });
+        res.status(500).json({ success: false, error: "Failed to create player" });
       }
     });
 
@@ -231,15 +239,8 @@ async function run() {
     app.post("/fixtures", async (req, res) => {
       try {
         const { month, matches } = req.body;
-        if (
-          !month ||
-          !matches ||
-          !Array.isArray(matches) ||
-          matches.length === 0
-        ) {
-          return res
-            .status(400)
-            .json({ error: "Required fields are missing." });
+        if (!month || !matches || !Array.isArray(matches) || matches.length === 0) {
+          return res.status(400).json({ error: "Required fields are missing." });
         }
 
         const newFixtureGroup = {
@@ -254,6 +255,7 @@ async function run() {
             status: match.status || "Upcoming",
             matchCenterUrl: match.matchCenterUrl || "",
             squad: [], // প্রতিটি ম্যাচের নিজস্ব স্কোয়াড অ্যারে
+            matchesCounted: false, // Completed হলে player matches count একবারই বাড়বে
           })),
         };
 
@@ -268,15 +270,15 @@ async function run() {
       }
     });
 
-    // === NEWLY ADDED: Match-Specific Squad Add / Remove Route ===
-    // 1. Match-Specific Squad Add / Remove Route (Protected with verifyToken)
+    // Squad add / remove (admin only) + player notification
     app.patch(
       "/fixtures/:groupId/match/:matchIndex/squad",
-      verifyToken, verifyAdmin,
+      verifyToken,
+      verifyAdmin,
       async (req, res) => {
         try {
           const { groupId, matchIndex } = req.params;
-          const { playerId, playerIds, action } = req.body; // add: playerIds[] | remove: playerId
+          const { playerId, playerIds, action } = req.body; // add: playerIds[] | remove: playerIds[] or playerId
 
           const ids = Array.isArray(playerIds) ? playerIds : [playerId];
 
@@ -292,30 +294,36 @@ async function run() {
           const fixtureGroup = await fixturesCollection.findOne(query);
 
           if (!fixtureGroup || !fixtureGroup.matches[matchIndex]) {
-            return res
-              .status(404)
-              .json({ error: "Fixture or Match not found." });
+            return res.status(404).json({ error: "Fixture or Match not found." });
           }
 
           const targetMatch = fixtureGroup.matches[matchIndex];
 
           // শুধু Upcoming ম্যাচে স্কোয়াড চেঞ্জ করা যাবে
           if (targetMatch.status !== "Upcoming") {
-            return res.status(400).json({
-              error: "Squad can only be modified for upcoming matches.",
-            });
+            return res
+              .status(400)
+              .json({ error: "Squad can only be modified for upcoming matches." });
           }
 
           const objectIds = ids.map((id) => new ObjectId(id));
           let updatedSquad = targetMatch.squad || [];
+          const newlyAdded = [];
+          const removed = [];
 
           if (action === "add") {
             objectIds.forEach((oid) => {
               if (!updatedSquad.some((id) => id.equals(oid))) {
                 updatedSquad.push(oid);
+                newlyAdded.push(oid);
               }
             });
           } else if (action === "remove") {
+            objectIds.forEach((oid) => {
+              if (updatedSquad.some((id) => id.equals(oid))) {
+                removed.push(oid);
+              }
+            });
             updatedSquad = updatedSquad.filter(
               (id) => !objectIds.some((oid) => oid.equals(id)),
             );
@@ -329,45 +337,87 @@ async function run() {
             $set: { matches: fixtureGroup.matches },
           });
 
+          // Notifications
+          const opponent = getOpponent(targetMatch);
+          const baseNotification = {
+            opponent,
+            matchDate: targetMatch.date,
+            matchTime: targetMatch.time,
+            groupId,
+            matchIndex: Number(matchIndex),
+            isRead: false,
+          };
+
+          if (newlyAdded.length > 0) {
+            await notificationsCollection.insertMany(
+              newlyAdded.map((pid) => ({
+                ...baseNotification,
+                playerId: pid,
+                type: "match_selected",
+                title: "You're in the squad!",
+                message: `You have been selected for the match against ${opponent} on ${targetMatch.date} at ${targetMatch.time}. Play well, and make sure you prepare yourself physically and mentally.`,
+                createdAt: new Date().toISOString(),
+              })),
+            );
+          }
+
+          if (removed.length > 0) {
+            await notificationsCollection.insertMany(
+              removed.map((pid) => ({
+                ...baseNotification,
+                playerId: pid,
+                type: "match_removed",
+                title: "Removed from the squad",
+                message: `You have been removed from the squad for the match against ${opponent} on ${targetMatch.date} at ${targetMatch.time}, based on the team's selection decision. Keep training and stay ready for the next match.`,
+                createdAt: new Date().toISOString(),
+              })),
+            );
+          }
+
           res.json({ success: true, squad: updatedSquad });
         } catch (err) {
           res.status(500).json({ success: false, error: err.message });
         }
       },
     );
-    // === NEWLY ADDED: Update Match Status & Increment Player Match Count on "Completed" ===
-    // 2. Update Match Status & Increment Player Match Count on "Completed"
+
+    // Update match status (admin only). "Completed" e player matches count shudhu ekbar barbe
     app.patch(
       "/fixtures/:groupId/match/:matchIndex/status",
-      verifyToken, verifyAdmin, 
+      verifyToken,
+      verifyAdmin,
       async (req, res) => {
         try {
           const { groupId, matchIndex } = req.params;
-          const { status } = req.body; // Expected: "Completed"
+          const { status } = req.body;
+
+          if (!ObjectId.isValid(groupId)) {
+            return res.status(400).json({ error: "Invalid ID format" });
+          }
+          if (!VALID_STATUSES.includes(status)) {
+            return res.status(400).json({ error: "Invalid status." });
+          }
 
           const query = { _id: new ObjectId(groupId) };
           const fixtureGroup = await fixturesCollection.findOne(query);
 
           if (!fixtureGroup || !fixtureGroup.matches[matchIndex]) {
-            return res
-              .status(404)
-              .json({ error: "Fixture or Match not found." });
+            return res.status(404).json({ error: "Fixture or Match not found." });
           }
 
           const targetMatch = fixtureGroup.matches[matchIndex];
-          const oldStatus = targetMatch.status;
 
-          // যদি স্ট্যাটাস পরিবর্তন করে "Completed" করা হয় এবং আগে সেটা Completed না থাকে
-          if (status === "Completed" && oldStatus !== "Completed") {
+          // Completed hole ar ager kokhono count na hoye thakle tobei +1
+          if (status === "Completed" && !targetMatch.matchesCounted) {
             const squadPlayerIds = targetMatch.squad || [];
 
             if (squadPlayerIds.length > 0) {
-              // স্কোয়াডে থাকা প্রতিটি প্লেয়ারের matches ফিল্ড ১ করে বাড়িয়ে দেওয়া
               await playersCollection.updateMany(
                 { _id: { $in: squadPlayerIds } },
                 { $inc: { matches: 1 } },
               );
             }
+            targetMatch.matchesCounted = true;
           }
 
           targetMatch.status = status;
@@ -386,7 +436,46 @@ async function run() {
       },
     );
 
-    // Best Moments APIs
+    // ==========================================
+    // NOTIFICATIONS
+    // ==========================================
+
+    app.get("/notifications/me", verifyToken, async (req, res) => {
+      try {
+        const player = await findPlayerByUser(req.user);
+        if (!player) return res.json({ notifications: [], unreadCount: 0 });
+
+        const notifications = await notificationsCollection
+          .find({ playerId: player._id })
+          .sort({ createdAt: -1 })
+          .limit(50)
+          .toArray();
+
+        res.json({
+          notifications,
+          unreadCount: notifications.filter((n) => !n.isRead).length,
+        });
+      } catch (err) {
+        res.status(500).json({ error: "Failed to fetch notifications" });
+      }
+    });
+
+    app.patch("/notifications/read-all", verifyToken, async (req, res) => {
+      try {
+        const player = await findPlayerByUser(req.user);
+        if (!player) return res.status(404).json({ error: "Player profile not found" });
+
+        await notificationsCollection.updateMany(
+          { playerId: player._id, isRead: false },
+          { $set: { isRead: true } },
+        );
+        res.json({ success: true });
+      } catch (err) {
+        res.status(500).json({ error: "Failed to update notifications" });
+      }
+    });
+
+    // ---------- Best Moments ----------
     app.get("/best-moments", async (req, res) => {
       try {
         const moments = await bestMomentsCollection.find().toArray();
@@ -406,9 +495,7 @@ async function run() {
       }
     });
 
-    console.log(
-      "Pinged your deployment. You successfully connected to MongoDB!",
-    );
+    console.log("Pinged your deployment. You successfully connected to MongoDB!");
   } finally {
     // await client.close();
   }
