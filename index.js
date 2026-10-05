@@ -26,6 +26,8 @@ const JWKS = createRemoteJWKSet(
 );
 
 const VALID_STATUSES = ["Upcoming", "Live", "Completed", "Cancelled"];
+const PLAYER_STATUSES = ["Active", "Injured", "Suspended", "Inactive", "Retired"];
+const USER_ROLES = ["player", "admin"];
 
 async function run() {
   try {
@@ -50,6 +52,31 @@ async function run() {
       return player;
     };
 
+    // ---------- Auth helpers ----------
+    // Token er user ke database theke khuje ber kore
+    const findAuthUser = async (payload) => {
+      if (payload.sub && ObjectId.isValid(payload.sub)) {
+        const byId = await userCollection.findOne({ _id: new ObjectId(payload.sub) });
+        if (byId) return byId;
+      }
+      if (payload.email) {
+        return userCollection.findOne({ email: payload.email });
+      }
+      return null;
+    };
+
+    // Player er linked login account (role/block er jonno)
+    const findUserForPlayer = async (player) => {
+      if (player.userId && ObjectId.isValid(player.userId)) {
+        const byId = await userCollection.findOne({ _id: new ObjectId(player.userId) });
+        if (byId) return byId;
+      }
+      if (player.email) {
+        return userCollection.findOne({ email: player.email });
+      }
+      return null;
+    };
+
     // ---------- Middlewares ----------
     const verifyToken = async (req, res, next) => {
       const authHeader = req.headers.authorization;
@@ -65,6 +92,14 @@ async function run() {
       try {
         const { payload } = await jwtVerify(token, JWKS);
         req.user = payload;
+        req.dbUser = await findAuthUser(payload);
+
+        if (req.dbUser?.isBlocked === true) {
+          return res.status(403).send({
+            message: "Your account has been blocked. Please contact the club admin.",
+          });
+        }
+
         next();
       } catch (error) {
         console.log("JWT verify failed:", error.code, error.message);
@@ -75,11 +110,8 @@ async function run() {
     // Admin only (verifyToken er por use korte hobe)
     const verifyAdmin = async (req, res, next) => {
       try {
-        let role = req.user?.role;
-        if (!role && req.user?.email) {
-          const dbUser = await userCollection.findOne({ email: req.user.email });
-          role = dbUser?.role;
-        }
+        // Database er role-i final. User khuje na pele token er role dekhbe
+        const role = req.dbUser ? req.dbUser.role : req.user?.role;
         if (role !== "admin") {
           return res.status(403).send({ message: "Forbidden access" });
         }
@@ -476,17 +508,20 @@ async function run() {
       }
     });
 
-
-        // ==========================================
-    // HERO SLIDER IMAGES (admin controlled)
+    // ==========================================
+    // HERO SLIDER IMAGES (admin controlled library)
     // ==========================================
 
-    // Public: latest N images (default 5)
+    // Public: default e shudhu active (slider e dekhano) image gulo.
+    // ?all=true dile shob image (admin page er jonno)
     app.get("/hero-images", async (req, res) => {
       try {
-        const limit = Math.min(Math.max(Number(req.query.limit) || 5, 1), 50);
+        const limit = Math.min(Math.max(Number(req.query.limit) || 10, 1), 100);
+        // isActive field nai emon purono doc gulo-o active dhora hobe
+        const filter = req.query.all === "true" ? {} : { isActive: { $ne: false } };
+
         const images = await heroImagesCollection
-          .find()
+          .find(filter)
           .sort({ createdAt: -1 })
           .limit(limit)
           .toArray();
@@ -508,6 +543,7 @@ async function run() {
         const image = {
           src,
           alt: alt || "FC Boraitola Squad Moment",
+          isActive: req.body.isActive !== false,
           createdAt: new Date().toISOString(),
           createdBy: req.user.sub,
         };
@@ -516,6 +552,32 @@ async function run() {
         res.status(201).json({ success: true, image: { ...image, _id: result.insertedId } });
       } catch (err) {
         res.status(500).json({ success: false, error: "Failed to add hero image" });
+      }
+    });
+
+    // Slider e dekhano / lukano toggle
+    app.patch("/hero-images/:id", verifyToken, verifyAdmin, async (req, res) => {
+      try {
+        const { id } = req.params;
+        const { isActive } = req.body;
+
+        if (!ObjectId.isValid(id)) {
+          return res.status(400).json({ error: "Invalid ID format" });
+        }
+        if (typeof isActive !== "boolean") {
+          return res.status(400).json({ error: "isActive must be true or false." });
+        }
+
+        const result = await heroImagesCollection.updateOne(
+          { _id: new ObjectId(id) },
+          { $set: { isActive } },
+        );
+        if (result.matchedCount === 0) {
+          return res.status(404).json({ error: "Image not found" });
+        }
+        res.json({ success: true, isActive });
+      } catch (err) {
+        res.status(500).json({ success: false, error: "Failed to update hero image" });
       }
     });
 
@@ -536,7 +598,156 @@ async function run() {
       }
     });
 
-    
+    // ==========================================
+    // ADMIN: PLAYER MANAGEMENT
+    // ==========================================
+
+    // Shob player + linked account er role / block obostha
+    app.get("/admin/players", verifyToken, verifyAdmin, async (req, res) => {
+      try {
+        const [players, users] = await Promise.all([
+          playersCollection.find().sort({ name: 1 }).toArray(),
+          userCollection
+            .find({}, { projection: { _id: 1, email: 1, role: 1, isBlocked: 1 } })
+            .toArray(),
+        ]);
+
+        const byId = new Map(users.map((u) => [String(u._id), u]));
+        const byEmail = new Map(users.filter((u) => u.email).map((u) => [u.email, u]));
+
+        res.json(
+          players.map((p) => {
+            const account = byId.get(String(p.userId)) || byEmail.get(p.email);
+            return {
+              ...p,
+              role: account?.role || "player",
+              hasAccount: !!account,
+              isBlocked: p.isBlocked === true || account?.isBlocked === true,
+            };
+          }),
+        );
+      } catch (err) {
+        res.status(500).json({ error: "Failed to fetch players" });
+      }
+    });
+
+    // Player status change
+    app.patch("/admin/players/:id/status", verifyToken, verifyAdmin, async (req, res) => {
+      try {
+        const { id } = req.params;
+        const { status } = req.body;
+
+        if (!ObjectId.isValid(id)) {
+          return res.status(400).json({ error: "Invalid ID format" });
+        }
+        if (!PLAYER_STATUSES.includes(status)) {
+          return res.status(400).json({ error: "Invalid status." });
+        }
+
+        const result = await playersCollection.updateOne(
+          { _id: new ObjectId(id) },
+          { $set: { status, updatedAt: new Date().toISOString() } },
+        );
+        if (result.matchedCount === 0) {
+          return res.status(404).json({ error: "Player not found" });
+        }
+        res.json({ success: true, status });
+      } catch (err) {
+        res.status(500).json({ success: false, error: "Failed to update status" });
+      }
+    });
+
+    // Block / unblock
+    app.patch("/admin/players/:id/block", verifyToken, verifyAdmin, async (req, res) => {
+      try {
+        const { id } = req.params;
+        const { isBlocked } = req.body;
+
+        if (!ObjectId.isValid(id)) {
+          return res.status(400).json({ error: "Invalid ID format" });
+        }
+        if (typeof isBlocked !== "boolean") {
+          return res.status(400).json({ error: "isBlocked must be true or false." });
+        }
+
+        const player = await playersCollection.findOne({ _id: new ObjectId(id) });
+        if (!player) {
+          return res.status(404).json({ error: "Player not found" });
+        }
+
+        const account = await findUserForPlayer(player);
+        const isSelf =
+          player.userId === req.user.sub ||
+          (account && req.dbUser && String(account._id) === String(req.dbUser._id));
+
+        if (isSelf) {
+          return res.status(400).json({ error: "You cannot block your own account." });
+        }
+        if (isBlocked && account?.role === "admin") {
+          return res
+            .status(400)
+            .json({ error: "Change this admin to a player before blocking." });
+        }
+
+        await playersCollection.updateOne(
+          { _id: player._id },
+          { $set: { isBlocked, blockedAt: isBlocked ? new Date().toISOString() : null } },
+        );
+        if (account) {
+          await userCollection.updateOne({ _id: account._id }, { $set: { isBlocked } });
+        }
+
+        res.json({ success: true, isBlocked });
+      } catch (err) {
+        res.status(500).json({ success: false, error: "Failed to update block status" });
+      }
+    });
+
+    // Role change (player <-> admin)
+    app.patch("/admin/players/:id/role", verifyToken, verifyAdmin, async (req, res) => {
+      try {
+        const { id } = req.params;
+        const { role } = req.body;
+
+        if (!ObjectId.isValid(id)) {
+          return res.status(400).json({ error: "Invalid ID format" });
+        }
+        if (!USER_ROLES.includes(role)) {
+          return res.status(400).json({ error: "Invalid role." });
+        }
+
+        const player = await playersCollection.findOne({ _id: new ObjectId(id) });
+        if (!player) {
+          return res.status(404).json({ error: "Player not found" });
+        }
+
+        const account = await findUserForPlayer(player);
+        if (!account) {
+          return res.status(404).json({
+            error: "This player has no login account yet, so the role cannot be changed.",
+          });
+        }
+
+        const isSelf =
+          player.userId === req.user.sub ||
+          (req.dbUser && String(account._id) === String(req.dbUser._id));
+
+        if (isSelf) {
+          return res.status(400).json({ error: "You cannot change your own role." });
+        }
+        if (role === "admin" && (account.isBlocked === true || player.isBlocked === true)) {
+          return res
+            .status(400)
+            .json({ error: "Unblock this player before making them an admin." });
+        }
+
+        await userCollection.updateOne({ _id: account._id }, { $set: { role } });
+        res.json({ success: true, role });
+      } catch (err) {
+        res.status(500).json({ success: false, error: "Failed to update role" });
+      }
+    });
+
     // ---------- Best Moments ----------
     app.get("/best-moments", async (req, res) => {
       try {
