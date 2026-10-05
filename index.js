@@ -36,6 +36,7 @@ async function run() {
     const bestMomentsCollection = db.collection("best-moments");
     const SquadCollection = db.collection("squads");
     const notificationsCollection = db.collection("notifications");
+    const heroImagesCollection = db.collection("hero-images");
 
     // ---------- Helpers ----------
     const getOpponent = (match) =>
@@ -475,6 +476,67 @@ async function run() {
       }
     });
 
+
+        // ==========================================
+    // HERO SLIDER IMAGES (admin controlled)
+    // ==========================================
+
+    // Public: latest N images (default 5)
+    app.get("/hero-images", async (req, res) => {
+      try {
+        const limit = Math.min(Math.max(Number(req.query.limit) || 5, 1), 50);
+        const images = await heroImagesCollection
+          .find()
+          .sort({ createdAt: -1 })
+          .limit(limit)
+          .toArray();
+        res.json(images);
+      } catch (err) {
+        res.status(500).json({ error: "Failed to fetch hero images" });
+      }
+    });
+
+    app.post("/hero-images", verifyToken, verifyAdmin, async (req, res) => {
+      try {
+        const src = (req.body.src || "").trim();
+        const alt = (req.body.alt || "").trim();
+
+        if (!/^https?:\/\/.+/i.test(src)) {
+          return res.status(400).json({ error: "A valid image URL (http/https) is required." });
+        }
+
+        const image = {
+          src,
+          alt: alt || "FC Boraitola Squad Moment",
+          createdAt: new Date().toISOString(),
+          createdBy: req.user.sub,
+        };
+
+        const result = await heroImagesCollection.insertOne(image);
+        res.status(201).json({ success: true, image: { ...image, _id: result.insertedId } });
+      } catch (err) {
+        res.status(500).json({ success: false, error: "Failed to add hero image" });
+      }
+    });
+
+    app.delete("/hero-images/:id", verifyToken, verifyAdmin, async (req, res) => {
+      try {
+        const { id } = req.params;
+        if (!ObjectId.isValid(id)) {
+          return res.status(400).json({ error: "Invalid ID format" });
+        }
+
+        const result = await heroImagesCollection.deleteOne({ _id: new ObjectId(id) });
+        if (result.deletedCount === 0) {
+          return res.status(404).json({ error: "Image not found" });
+        }
+        res.json({ success: true });
+      } catch (err) {
+        res.status(500).json({ success: false, error: "Failed to delete hero image" });
+      }
+    });
+
+    
     // ---------- Best Moments ----------
     app.get("/best-moments", async (req, res) => {
       try {
