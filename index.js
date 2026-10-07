@@ -26,7 +26,13 @@ const JWKS = createRemoteJWKSet(
 );
 
 const VALID_STATUSES = ["Upcoming", "Live", "Completed", "Cancelled"];
-const PLAYER_STATUSES = ["Active", "Injured", "Suspended", "Inactive", "Retired"];
+const PLAYER_STATUSES = [
+  "Active",
+  "Injured",
+  "Suspended",
+  "Inactive",
+  "Retired",
+];
 const USER_ROLES = ["player", "admin"];
 
 async function run() {
@@ -39,6 +45,7 @@ async function run() {
     const SquadCollection = db.collection("squads");
     const notificationsCollection = db.collection("notifications");
     const heroImagesCollection = db.collection("hero-images");
+    const contactMessagesCollection = db.collection("contact-messages");
 
     // ---------- Helpers ----------
     const getOpponent = (match) =>
@@ -56,7 +63,9 @@ async function run() {
     // Token er user ke database theke khuje ber kore
     const findAuthUser = async (payload) => {
       if (payload.sub && ObjectId.isValid(payload.sub)) {
-        const byId = await userCollection.findOne({ _id: new ObjectId(payload.sub) });
+        const byId = await userCollection.findOne({
+          _id: new ObjectId(payload.sub),
+        });
         if (byId) return byId;
       }
       if (payload.email) {
@@ -68,7 +77,9 @@ async function run() {
     // Player er linked login account (role/block er jonno)
     const findUserForPlayer = async (player) => {
       if (player.userId && ObjectId.isValid(player.userId)) {
-        const byId = await userCollection.findOne({ _id: new ObjectId(player.userId) });
+        const byId = await userCollection.findOne({
+          _id: new ObjectId(player.userId),
+        });
         if (byId) return byId;
       }
       if (player.email) {
@@ -96,7 +107,8 @@ async function run() {
 
         if (req.dbUser?.isBlocked === true) {
           return res.status(403).send({
-            message: "Your account has been blocked. Please contact the club admin.",
+            message:
+              "Your account has been blocked. Please contact the club admin.",
           });
         }
 
@@ -226,7 +238,9 @@ async function run() {
         if (!ObjectId.isValid(id)) {
           return res.status(400).send({ error: "Invalid player ID format" });
         }
-        const result = await playersCollection.findOne({ _id: new ObjectId(id) });
+        const result = await playersCollection.findOne({
+          _id: new ObjectId(id),
+        });
         if (!result) {
           return res.status(404).send({ error: "Player not found" });
         }
@@ -238,7 +252,9 @@ async function run() {
 
     app.post("/add-player", verifyToken, async (req, res) => {
       try {
-        const existing = await playersCollection.findOne({ userId: req.user.sub });
+        const existing = await playersCollection.findOne({
+          userId: req.user.sub,
+        });
         if (existing) {
           return res.status(400).json({
             success: false,
@@ -255,7 +271,9 @@ async function run() {
           insertedId: result.insertedId,
         });
       } catch (error) {
-        res.status(500).json({ success: false, error: "Failed to create player" });
+        res
+          .status(500)
+          .json({ success: false, error: "Failed to create player" });
       }
     });
 
@@ -272,8 +290,15 @@ async function run() {
     app.post("/fixtures", async (req, res) => {
       try {
         const { month, matches } = req.body;
-        if (!month || !matches || !Array.isArray(matches) || matches.length === 0) {
-          return res.status(400).json({ error: "Required fields are missing." });
+        if (
+          !month ||
+          !matches ||
+          !Array.isArray(matches) ||
+          matches.length === 0
+        ) {
+          return res
+            .status(400)
+            .json({ error: "Required fields are missing." });
         }
 
         const newFixtureGroup = {
@@ -327,16 +352,18 @@ async function run() {
           const fixtureGroup = await fixturesCollection.findOne(query);
 
           if (!fixtureGroup || !fixtureGroup.matches[matchIndex]) {
-            return res.status(404).json({ error: "Fixture or Match not found." });
+            return res
+              .status(404)
+              .json({ error: "Fixture or Match not found." });
           }
 
           const targetMatch = fixtureGroup.matches[matchIndex];
 
           // শুধু Upcoming ম্যাচে স্কোয়াড চেঞ্জ করা যাবে
           if (targetMatch.status !== "Upcoming") {
-            return res
-              .status(400)
-              .json({ error: "Squad can only be modified for upcoming matches." });
+            return res.status(400).json({
+              error: "Squad can only be modified for upcoming matches.",
+            });
           }
 
           const objectIds = ids.map((id) => new ObjectId(id));
@@ -435,7 +462,9 @@ async function run() {
           const fixtureGroup = await fixturesCollection.findOne(query);
 
           if (!fixtureGroup || !fixtureGroup.matches[matchIndex]) {
-            return res.status(404).json({ error: "Fixture or Match not found." });
+            return res
+              .status(404)
+              .json({ error: "Fixture or Match not found." });
           }
 
           const targetMatch = fixtureGroup.matches[matchIndex];
@@ -496,7 +525,8 @@ async function run() {
     app.patch("/notifications/read-all", verifyToken, async (req, res) => {
       try {
         const player = await findPlayerByUser(req.user);
-        if (!player) return res.status(404).json({ error: "Player profile not found" });
+        if (!player)
+          return res.status(404).json({ error: "Player profile not found" });
 
         await notificationsCollection.updateMany(
           { playerId: player._id, isRead: false },
@@ -518,7 +548,8 @@ async function run() {
       try {
         const limit = Math.min(Math.max(Number(req.query.limit) || 10, 1), 100);
         // isActive field nai emon purono doc gulo-o active dhora hobe
-        const filter = req.query.all === "true" ? {} : { isActive: { $ne: false } };
+        const filter =
+          req.query.all === "true" ? {} : { isActive: { $ne: false } };
 
         const images = await heroImagesCollection
           .find(filter)
@@ -537,7 +568,9 @@ async function run() {
         const alt = (req.body.alt || "").trim();
 
         if (!/^https?:\/\/.+/i.test(src)) {
-          return res.status(400).json({ error: "A valid image URL (http/https) is required." });
+          return res
+            .status(400)
+            .json({ error: "A valid image URL (http/https) is required." });
         }
 
         const image = {
@@ -549,54 +582,76 @@ async function run() {
         };
 
         const result = await heroImagesCollection.insertOne(image);
-        res.status(201).json({ success: true, image: { ...image, _id: result.insertedId } });
+        res
+          .status(201)
+          .json({ success: true, image: { ...image, _id: result.insertedId } });
       } catch (err) {
-        res.status(500).json({ success: false, error: "Failed to add hero image" });
+        res
+          .status(500)
+          .json({ success: false, error: "Failed to add hero image" });
       }
     });
 
     // Slider e dekhano / lukano toggle
-    app.patch("/hero-images/:id", verifyToken, verifyAdmin, async (req, res) => {
-      try {
-        const { id } = req.params;
-        const { isActive } = req.body;
+    app.patch(
+      "/hero-images/:id",
+      verifyToken,
+      verifyAdmin,
+      async (req, res) => {
+        try {
+          const { id } = req.params;
+          const { isActive } = req.body;
 
-        if (!ObjectId.isValid(id)) {
-          return res.status(400).json({ error: "Invalid ID format" });
-        }
-        if (typeof isActive !== "boolean") {
-          return res.status(400).json({ error: "isActive must be true or false." });
-        }
+          if (!ObjectId.isValid(id)) {
+            return res.status(400).json({ error: "Invalid ID format" });
+          }
+          if (typeof isActive !== "boolean") {
+            return res
+              .status(400)
+              .json({ error: "isActive must be true or false." });
+          }
 
-        const result = await heroImagesCollection.updateOne(
-          { _id: new ObjectId(id) },
-          { $set: { isActive } },
-        );
-        if (result.matchedCount === 0) {
-          return res.status(404).json({ error: "Image not found" });
+          const result = await heroImagesCollection.updateOne(
+            { _id: new ObjectId(id) },
+            { $set: { isActive } },
+          );
+          if (result.matchedCount === 0) {
+            return res.status(404).json({ error: "Image not found" });
+          }
+          res.json({ success: true, isActive });
+        } catch (err) {
+          res
+            .status(500)
+            .json({ success: false, error: "Failed to update hero image" });
         }
-        res.json({ success: true, isActive });
-      } catch (err) {
-        res.status(500).json({ success: false, error: "Failed to update hero image" });
-      }
-    });
+      },
+    );
 
-    app.delete("/hero-images/:id", verifyToken, verifyAdmin, async (req, res) => {
-      try {
-        const { id } = req.params;
-        if (!ObjectId.isValid(id)) {
-          return res.status(400).json({ error: "Invalid ID format" });
-        }
+    app.delete(
+      "/hero-images/:id",
+      verifyToken,
+      verifyAdmin,
+      async (req, res) => {
+        try {
+          const { id } = req.params;
+          if (!ObjectId.isValid(id)) {
+            return res.status(400).json({ error: "Invalid ID format" });
+          }
 
-        const result = await heroImagesCollection.deleteOne({ _id: new ObjectId(id) });
-        if (result.deletedCount === 0) {
-          return res.status(404).json({ error: "Image not found" });
+          const result = await heroImagesCollection.deleteOne({
+            _id: new ObjectId(id),
+          });
+          if (result.deletedCount === 0) {
+            return res.status(404).json({ error: "Image not found" });
+          }
+          res.json({ success: true });
+        } catch (err) {
+          res
+            .status(500)
+            .json({ success: false, error: "Failed to delete hero image" });
         }
-        res.json({ success: true });
-      } catch (err) {
-        res.status(500).json({ success: false, error: "Failed to delete hero image" });
-      }
-    });
+      },
+    );
 
     // ==========================================
     // ADMIN: PLAYER MANAGEMENT
@@ -608,12 +663,17 @@ async function run() {
         const [players, users] = await Promise.all([
           playersCollection.find().sort({ name: 1 }).toArray(),
           userCollection
-            .find({}, { projection: { _id: 1, email: 1, role: 1, isBlocked: 1 } })
+            .find(
+              {},
+              { projection: { _id: 1, email: 1, role: 1, isBlocked: 1 } },
+            )
             .toArray(),
         ]);
 
         const byId = new Map(users.map((u) => [String(u._id), u]));
-        const byEmail = new Map(users.filter((u) => u.email).map((u) => [u.email, u]));
+        const byEmail = new Map(
+          users.filter((u) => u.email).map((u) => [u.email, u]),
+        );
 
         res.json(
           players.map((p) => {
@@ -632,135 +692,376 @@ async function run() {
     });
 
     // Player status change
-    app.patch("/admin/players/:id/status", verifyToken, verifyAdmin, async (req, res) => {
-      try {
-        const { id } = req.params;
-        const { status } = req.body;
+    app.patch(
+      "/admin/players/:id/status",
+      verifyToken,
+      verifyAdmin,
+      async (req, res) => {
+        try {
+          const { id } = req.params;
+          const { status } = req.body;
 
-        if (!ObjectId.isValid(id)) {
-          return res.status(400).json({ error: "Invalid ID format" });
-        }
-        if (!PLAYER_STATUSES.includes(status)) {
-          return res.status(400).json({ error: "Invalid status." });
-        }
+          if (!ObjectId.isValid(id)) {
+            return res.status(400).json({ error: "Invalid ID format" });
+          }
+          if (!PLAYER_STATUSES.includes(status)) {
+            return res.status(400).json({ error: "Invalid status." });
+          }
 
-        const result = await playersCollection.updateOne(
-          { _id: new ObjectId(id) },
-          { $set: { status, updatedAt: new Date().toISOString() } },
-        );
-        if (result.matchedCount === 0) {
-          return res.status(404).json({ error: "Player not found" });
+          const result = await playersCollection.updateOne(
+            { _id: new ObjectId(id) },
+            { $set: { status, updatedAt: new Date().toISOString() } },
+          );
+          if (result.matchedCount === 0) {
+            return res.status(404).json({ error: "Player not found" });
+          }
+          res.json({ success: true, status });
+        } catch (err) {
+          res
+            .status(500)
+            .json({ success: false, error: "Failed to update status" });
         }
-        res.json({ success: true, status });
-      } catch (err) {
-        res.status(500).json({ success: false, error: "Failed to update status" });
-      }
-    });
+      },
+    );
 
     // Block / unblock
-    app.patch("/admin/players/:id/block", verifyToken, verifyAdmin, async (req, res) => {
-      try {
-        const { id } = req.params;
-        const { isBlocked } = req.body;
+    app.patch(
+      "/admin/players/:id/block",
+      verifyToken,
+      verifyAdmin,
+      async (req, res) => {
+        try {
+          const { id } = req.params;
+          const { isBlocked } = req.body;
 
-        if (!ObjectId.isValid(id)) {
-          return res.status(400).json({ error: "Invalid ID format" });
-        }
-        if (typeof isBlocked !== "boolean") {
-          return res.status(400).json({ error: "isBlocked must be true or false." });
-        }
+          if (!ObjectId.isValid(id)) {
+            return res.status(400).json({ error: "Invalid ID format" });
+          }
+          if (typeof isBlocked !== "boolean") {
+            return res
+              .status(400)
+              .json({ error: "isBlocked must be true or false." });
+          }
 
-        const player = await playersCollection.findOne({ _id: new ObjectId(id) });
-        if (!player) {
-          return res.status(404).json({ error: "Player not found" });
-        }
+          const player = await playersCollection.findOne({
+            _id: new ObjectId(id),
+          });
+          if (!player) {
+            return res.status(404).json({ error: "Player not found" });
+          }
 
-        const account = await findUserForPlayer(player);
-        const isSelf =
-          player.userId === req.user.sub ||
-          (account && req.dbUser && String(account._id) === String(req.dbUser._id));
+          const account = await findUserForPlayer(player);
+          const isSelf =
+            player.userId === req.user.sub ||
+            (account &&
+              req.dbUser &&
+              String(account._id) === String(req.dbUser._id));
 
-        if (isSelf) {
-          return res.status(400).json({ error: "You cannot block your own account." });
-        }
-        if (isBlocked && account?.role === "admin") {
-          return res
-            .status(400)
-            .json({ error: "Change this admin to a player before blocking." });
-        }
+          if (isSelf) {
+            return res
+              .status(400)
+              .json({ error: "You cannot block your own account." });
+          }
+          if (isBlocked && account?.role === "admin") {
+            return res.status(400).json({
+              error: "Change this admin to a player before blocking.",
+            });
+          }
 
-        await playersCollection.updateOne(
-          { _id: player._id },
-          { $set: { isBlocked, blockedAt: isBlocked ? new Date().toISOString() : null } },
-        );
-        if (account) {
-          await userCollection.updateOne({ _id: account._id }, { $set: { isBlocked } });
-        }
+          await playersCollection.updateOne(
+            { _id: player._id },
+            {
+              $set: {
+                isBlocked,
+                blockedAt: isBlocked ? new Date().toISOString() : null,
+              },
+            },
+          );
+          if (account) {
+            await userCollection.updateOne(
+              { _id: account._id },
+              { $set: { isBlocked } },
+            );
+          }
 
-        res.json({ success: true, isBlocked });
-      } catch (err) {
-        res.status(500).json({ success: false, error: "Failed to update block status" });
-      }
-    });
+          res.json({ success: true, isBlocked });
+        } catch (err) {
+          res
+            .status(500)
+            .json({ success: false, error: "Failed to update block status" });
+        }
+      },
+    );
 
     // Role change (player <-> admin)
-    app.patch("/admin/players/:id/role", verifyToken, verifyAdmin, async (req, res) => {
+    app.patch(
+      "/admin/players/:id/role",
+      verifyToken,
+      verifyAdmin,
+      async (req, res) => {
+        try {
+          const { id } = req.params;
+          const { role } = req.body;
+
+          if (!ObjectId.isValid(id)) {
+            return res.status(400).json({ error: "Invalid ID format" });
+          }
+          if (!USER_ROLES.includes(role)) {
+            return res.status(400).json({ error: "Invalid role." });
+          }
+
+          const player = await playersCollection.findOne({
+            _id: new ObjectId(id),
+          });
+          if (!player) {
+            return res.status(404).json({ error: "Player not found" });
+          }
+
+          const account = await findUserForPlayer(player);
+          if (!account) {
+            return res.status(404).json({
+              error:
+                "This player has no login account yet, so the role cannot be changed.",
+            });
+          }
+
+          const isSelf =
+            player.userId === req.user.sub ||
+            (req.dbUser && String(account._id) === String(req.dbUser._id));
+
+          if (isSelf) {
+            return res
+              .status(400)
+              .json({ error: "You cannot change your own role." });
+          }
+          if (
+            role === "admin" &&
+            (account.isBlocked === true || player.isBlocked === true)
+          ) {
+            return res.status(400).json({
+              error: "Unblock this player before making them an admin.",
+            });
+          }
+
+          await userCollection.updateOne(
+            { _id: account._id },
+            { $set: { role } },
+          );
+          res.json({ success: true, role });
+        } catch (err) {
+          res
+            .status(500)
+            .json({ success: false, error: "Failed to update role" });
+        }
+      },
+    );
+
+    // ==========================================
+    // CONTACT MESSAGES
+    // ==========================================
+
+    // Public: contact form submit
+    app.post("/contact", async (req, res) => {
       try {
-        const { id } = req.params;
-        const { role } = req.body;
-
-        if (!ObjectId.isValid(id)) {
-          return res.status(400).json({ error: "Invalid ID format" });
-        }
-        if (!USER_ROLES.includes(role)) {
-          return res.status(400).json({ error: "Invalid role." });
+        if (req.body.hp_field) {
+          return res.status(201).json({ success: true });
         }
 
-        const player = await playersCollection.findOne({ _id: new ObjectId(id) });
-        if (!player) {
-          return res.status(404).json({ error: "Player not found" });
+        const name = String(req.body.name || "").trim();
+        const email = String(req.body.email || "")
+          .trim()
+          .toLowerCase();
+        
+        // ফোন নাম্বার থেকে স্পেস এবং ড্যাশ রিমুভ করে ক্লিন করা হলো
+        const phone = String(req.body.phone || "").trim().replace(/[\s-]/g, "");
+
+        const subject = String(req.body.subject || "General question")
+          .trim()
+          .slice(0, 120);
+        const message = String(req.body.message || "").trim();
+
+        if (name.length < 2 || name.length > 80) {
+          return res
+            .status(400)
+            .json({ error: "Please enter your name (2-80 characters)." });
+        }
+        if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || email.length > 120) {
+          return res
+            .status(400)
+            .json({ error: "Please enter a valid email address." });
         }
 
-        const account = await findUserForPlayer(player);
-        if (!account) {
-          return res.status(404).json({
-            error: "This player has no login account yet, so the role cannot be changed.",
+        // ভ্যালিডেশন (ক্লিন করা নাম্বারের ওপর চেক করা হবে)
+        if (!/^(?:\+88)?01[3-9]\d{8}$/.test(phone)) {
+          return res.status(400).json({
+            error: "Please enter a valid Bangladeshi phone number (e.g., 01712345678).",
           });
         }
 
-        const isSelf =
-          player.userId === req.user.sub ||
-          (req.dbUser && String(account._id) === String(req.dbUser._id));
-
-        if (isSelf) {
-          return res.status(400).json({ error: "You cannot change your own role." });
-        }
-        if (role === "admin" && (account.isBlocked === true || player.isBlocked === true)) {
+        if (message.length < 10 || message.length > 1000) {
           return res
             .status(400)
-            .json({ error: "Unblock this player before making them an admin." });
+            .json({
+              error: "Your message must be between 10 and 1000 characters.",
+            });
         }
 
-        await userCollection.updateOne({ _id: account._id }, { $set: { role } });
-        res.json({ success: true, role });
+        const oneHourAgo = new Date(Date.now() - 60 * 60 * 1000).toISOString();
+        const recent = await contactMessagesCollection.countDocuments({
+          email,
+          createdAt: { $gte: oneHourAgo },
+        });
+        if (recent >= 3) {
+          return res.status(429).json({
+            error: "You have already sent a few messages. Please try again a little later.",
+          });
+        }
+console.log("Received", {name, email, phone, subject, message});
+
+await contactMessagesCollection.insertOne({
+          name,
+          email,
+          phone, // ক্লিন করা ফোন নাম্বার ডাটাবেজে সেভ হবে
+          subject,
+          message,
+          isRead: false,
+          createdAt: new Date().toISOString(),
+        });
+
+        res.status(201).json({ success: true });
       } catch (err) {
-        res.status(500).json({ success: false, error: "Failed to update role" });
+        console.error("Contact API Error:", err);
+        res
+          .status(500)
+          .json({ error: "Failed to send your message. Please try again." });
       }
     });
 
+    // Admin: shob message
+    app.get("/admin/messages", verifyToken, verifyAdmin, async (req, res) => {
+      try {
+        const messages = await contactMessagesCollection
+          .find()
+          .sort({ createdAt: -1 })
+          .limit(200)
+          .toArray();
+        res.json(messages);
+      } catch (err) {
+        res.status(500).json({ error: "Failed to fetch messages" });
+      }
+    });
+
+    // Admin: read / unread
+    app.patch(
+      "/admin/messages/:id",
+      verifyToken,
+      verifyAdmin,
+      async (req, res) => {
+        try {
+          const { id } = req.params;
+          const { isRead } = req.body;
+
+          if (!ObjectId.isValid(id)) {
+            return res.status(400).json({ error: "Invalid ID format" });
+          }
+          if (typeof isRead !== "boolean") {
+            return res
+              .status(400)
+              .json({ error: "isRead must be true or false." });
+          }
+
+          const result = await contactMessagesCollection.updateOne(
+            { _id: new ObjectId(id) },
+            { $set: { isRead } },
+          );
+          if (result.matchedCount === 0) {
+            return res.status(404).json({ error: "Message not found" });
+          }
+          res.json({ success: true, isRead });
+        } catch (err) {
+          res
+            .status(500)
+            .json({ success: false, error: "Failed to update message" });
+        }
+      },
+    );
+
+    // Admin: delete
+    app.delete(
+      "/admin/messages/:id",
+      verifyToken,
+      verifyAdmin,
+      async (req, res) => {
+        try {
+          const { id } = req.params;
+          if (!ObjectId.isValid(id)) {
+            return res.status(400).json({ error: "Invalid ID format" });
+          }
+
+          const result = await contactMessagesCollection.deleteOne({
+            _id: new ObjectId(id),
+          });
+          if (result.deletedCount === 0) {
+            return res.status(404).json({ error: "Message not found" });
+          }
+          res.json({ success: true });
+        } catch (err) {
+          res
+            .status(500)
+            .json({ success: false, error: "Failed to delete message" });
+        }
+      },
+    );
+
     // ---------- Best Moments ----------
+
     app.get("/best-moments", async (req, res) => {
       try {
-        const moments = await bestMomentsCollection.find().toArray();
+        const moments = await bestMomentsCollection
+          .find()
+          .sort({ _id: -1 }) // notun post prothome
+          .toArray();
         res.status(200).json(moments);
       } catch (error) {
         res.status(500).json({ success: false, error: error.message });
       }
     });
 
-    app.post("/best-moments", verifyToken, async (req, res) => {
+    app.post("/best-moments", verifyToken, verifyAdmin, async (req, res) => {
       try {
-        const newMoment = req.body;
+        const title = (req.body.title || "").trim();
+        const category = (req.body.category || "").trim();
+        const mediaUrl = (req.body.mediaUrl || "").trim();
+        const caption = (req.body.caption || "").trim();
+
+        if (!title || !category || !caption) {
+          return res.status(400).json({
+            success: false,
+            error: "Title, match name and caption are required.",
+          });
+        }
+        if (!/^https?:\/\/.+/i.test(mediaUrl)) {
+          return res.status(400).json({
+            success: false,
+            error: "A valid image URL (http/https) is required.",
+          });
+        }
+        if (caption.length > 100) {
+          return res.status(400).json({
+            success: false,
+            error: "Caption must be within 100 characters.",
+          });
+        }
+
+        const newMoment = {
+          title,
+          category,
+          mediaUrl,
+          caption,
+          createdAt: new Date().toISOString(),
+          createdBy: req.user.sub,
+        };
+
         const result = await bestMomentsCollection.insertOne(newMoment);
         res.status(201).json({ success: true, data: result });
       } catch (error) {
@@ -768,7 +1069,9 @@ async function run() {
       }
     });
 
-    console.log("Pinged your deployment. You successfully connected to MongoDB!");
+    console.log(
+      "Pinged your deployment. You successfully connected to MongoDB!",
+    );
   } finally {
     // await client.close();
   }
